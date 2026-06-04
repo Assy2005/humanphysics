@@ -5,6 +5,7 @@
 
 | スクリプト | 目的 |
 |---|---|
+| `check_agent.py` | agent-trap を実Chromeで検証。各知覚経路（可視/全DOM/innerText/innerHTML/a11yツリー）に**どのトラップが映るか**を解析し、効く/効かないagent種別を可視化。 |
 | `check_gpu.py` | GPU依存検知の弁別力を確認。`--headed` / `--software`（SwiftShader強制でGPU無し環境を模擬）。 |
 | `check_drm.py` | DRM/Widevine と HW復号の環境差を確認。`--headed`。 |
 | `collect_selenium.py` | bot サンプルを自動生成し `/collect` に送る（`analyze.py` 用）。 |

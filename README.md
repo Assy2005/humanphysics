@@ -17,14 +17,16 @@ HumanPhysics は問いを変えます — 「クライアントの**実行が物
 
 - ✅ **確実に弾く（高精度・無操作）**: GPU 無し／ソフトレンダラ環境（クラウドサーバ・VM・データセンター）、Selenium/Playwright/Puppeteer 等の自動化フレームワーク、headless（GPU無し）、no-JS スクレイパ、Chrome-for-Testing。**＝安価・大量スクレイピングの大半。**
 - ⏳ **時間軸で捕える**: 実ハードウェア上の bot も、スケールすればサーバ側集約（同一指紋の velocity・IP集中）で捕捉。
-- ❌ **単発では捕えられない**: 実消費者ブラウザ＋実 GPU＋住宅IPで動く高度な AI エージェント。物理が“本物”なので 1 リクエストでは人間と区別不能。これは**クライアント側パッシブ検知の根本的な天井**で、正直に記録しています（[research/README.md](research/README.md)）。
+- 🆕 **AIエージェントを捕える（知覚-認知層）**: 人間に不可視のトラップ（不可視リンク／自然言語の指示／理解+計算を要する検証）で、**DOM/HTML/テキストを摂取して動く AI エージェント・スクレイパ**を捕捉。*環境ではなく知覚・認知を測る*ので、**実ブラウザ上のエージェントでも踏む**（物理の天井の向こう側）。人間は物理的に触れないので誤検知ほぼゼロ。
+- ❌ **残る天井**: ①ページを一切読まず単発 POST するだけの bot（→物理/velocity層が担当）／②アクセシビリティツリーのみ・純 Vision で知覚するエージェント（`aria-hidden`/不可視トラップが映らない。「知覚チャネル三角測量」が次の課題）。完全な人間/bot 二値判定は誰も達成しておらず（reCAPTCHA も同様）、ここは正直に記録します（[research/README.md](research/README.md)）。
 
 要するに「**安価 bot を無操作で高精度に弾き、全員に計算コストを課し、スケールした抽象を時間軸で捕える**」——堅実で出荷できる設計です。
 
-## どう動くか（3層 ＋ サーバ）
+## どう動くか（物理3層 ＋ 認知層 ＋ サーバ）
 
 | 層 | 中身 | 主に捕えるもの |
 |---|---|---|
+| 🆕 **AIエージェント・トラップ** (`agent-trap.js`) | 人間不可視の罠：不可視リンク／プロンプト指示／**理解+計算を要する検証**（ハーベスタ不可） | **ページを読んで動く AI エージェント**・DOM列挙scraper |
 | **GPU依存** (`gpu-detect.js`) | WebGL/WebGPU の実在・アダプタ・**描画/計算時間**、renderer文字列 vs 実測速度の不整合 | GPU無し・ソフトレンダラ・レンダラ詐称 |
 | **Core A 実行物理** (`detector.js`) | タイマ分解能・計算ジッタ・数値精度・rAF周期・DRM(CDM)・HW復号 | エミュ・VM・自動化Chromium |
 | **aux 痕跡** (`detector.js`) | `navigator.webdriver`・headless UA・automation グローバル・CDP red-pill | 単純 bot の足切り |
@@ -38,9 +40,11 @@ HumanPhysics は問いを変えます — 「クライアントの**実行が物
 public/
   detector.js    Core A + aux の受動プローブ＋判定 (window.HumanPhysics)
   gpu-detect.js  GPU依存プローブ (window.GPUDetect)
+  agent-trap.js  AIエージェント・トラップ（知覚-認知層・完全不可視）
   hp-embed.js    フォーム保護 (HumanPhysics.guardForm)
   hp-gate.js     サイトゲート (SHA-256 PoW + 判定)
   index.html     シグナル・ダッシュボード
+  agent.html     AIエージェント検知のデモ
   gate.html / home.html   サイトゲートのデモ
   demo.html      フォーム保護のデモ
   gpu.html       GPU検知のデモ

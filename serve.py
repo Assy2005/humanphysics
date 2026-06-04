@@ -287,7 +287,7 @@ _TRAPS = {}  # sid -> {"channels": set, "ip": str, "ts": float}
 
 
 def record_trap(sid, channel, ip):
-    if not sid or channel not in ("dom", "llm", "field"):
+    if not sid or channel not in ("dom", "llm", "field", "think"):
         return
     now = time.time()
     with _TRAP_LOCK:
@@ -309,8 +309,10 @@ def trap_channels(sid):
 
 def trap_score(channels):
     bot, reasons = 0, []
+    if "think" in channels:  # 理解+計算が必要＝本物のLLM理解（ハーベスタ不可）
+        bot += 80; reasons.append("不可視の指示を理解し計算して応答（LLMエージェント確定）")
     if "llm" in channels:
-        bot += 70; reasons.append("不可視のプロンプト指示に追従（AIエージェントの痕跡）")
+        bot += 60; reasons.append("不可視のプロンプト指示に追従（ページ文面を摂取する自動化）")
     if "dom" in channels:
         bot += 50; reasons.append("不可視リンクへのアクセス（DOM列挙botの痕跡）")
     if "field" in channels:
@@ -359,7 +361,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/hp/trap":
             q = parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
-            record_trap((q.get("s") or [""])[0], (q.get("c") or [""])[0], self.client_address[0])
+            c = (q.get("c") or [""])[0]
+            s = (q.get("s") or [""])[0]
+            if c == "think":
+                # 単語 'agent' は5文字。正答時のみ記録（ハーベスタは literal "N" を取得し正答できない）
+                if (q.get("a") or [""])[0] == "5":
+                    record_trap(s, "think", self.client_address[0])
+            else:
+                record_trap(s, c, self.client_address[0])
             self._send(204)  # 何食わぬ顔で（agent に検知を悟らせない）
             return
         if path == "/":
