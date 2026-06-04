@@ -244,6 +244,31 @@
     return { rafIntervals: raf.map((x) => round(x, 3)), raf: stats(raf), setTimeout0: stats(st) };
   }
 
+  // (A6) DRM/EME ケイパビリティ（ハードウェア・アテステーション＝「映画配信の保護層」）。
+  // 実消費者ブラウザは Widevine/PlayReady を持ち、対応機では HW_SECURE_* が通る。
+  // headless Chromium や多くの bot は CDM 非搭載 →「Chrome を名乗るのに Widevine 無し」を暴く。
+  async function probeDRM() {
+    if (!navigator.requestMediaKeySystemAccess) return { supported: false };
+    var cfg = function (robustness) {
+      return [{ initDataTypes: ['cenc'], videoCapabilities: [{ contentType: 'video/mp4; codecs="avc1.42E01E"', robustness: robustness }] }];
+    };
+    // 一部環境(Electron 等)で requestMediaKeySystemAccess がハングするためタイムアウトを付ける
+    var timeout = function (ms) { return new Promise(function (_, rej) { setTimeout(function () { rej(new Error('drm-timeout')); }, ms); }); };
+    var tryKS = async function (ks, r) {
+      try { await Promise.race([navigator.requestMediaKeySystemAccess(ks, cfg(r)), timeout(800)]); return true; } catch (e) { return false; }
+    };
+    var out = { supported: true, widevine: false, playready: false, widevineRobustness: null };
+    out.widevine = await tryKS('com.widevine.alpha', '');
+    out.playready = await tryKS('com.microsoft.playready.recommendation', '');
+    if (out.widevine) {
+      var levels = ['HW_SECURE_ALL', 'HW_SECURE_DECODE', 'SW_SECURE_DECODE', 'SW_SECURE_CRYPTO'];
+      for (var j = 0; j < levels.length; j++) {
+        if (await tryKS('com.widevine.alpha', levels[j])) { out.widevineRobustness = levels[j]; break; }
+      }
+    }
+    return out;
+  }
+
   // ===================== aux: 安価なプロパティ痕跡 =====================
   function probeAux() {
     const w = window,
@@ -519,13 +544,14 @@
     const math = probeMathPrecision();
     const webgl = probeWebGL();
     const scheduling = await probeScheduling();
+    const drm = await probeDRM();
     return {
       schema: 1,
       ts: Date.now(),
       label: null,
       href: location.href,
       aux,
-      coreA: { timer, compute, math, webgl, scheduling },
+      coreA: { timer, compute, math, webgl, scheduling, drm },
       coreB: null,
     };
   }
