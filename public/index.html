@@ -195,6 +195,8 @@
           ['WebGL 描画(ms,中央値)', a.webgl.drawMs ? a.webgl.drawMs.median : null],
           ['rAF間隔(ms,中央値)', a.scheduling.raf.median],
           ['setTimeout0(ms,中央値)', a.scheduling.setTimeout0.median],
+          ['Widevine DRM', a.drm ? (a.drm.widevine ? ('あり (' + (a.drm.widevineRobustness || 'SW') + ')') : 'なし') : '-', !!(a.drm && a.drm.widevine === false)],
+          ['HW動画復号', a.media ? (a.media.hwDecodeAny ? ('あり' + (a.media.hevcHW ? ' / HEVC-HW' : '')) : 'なし') : '-', !!(a.media && a.media.hwDecodeAny === false)],
         ]);
         $('aux').innerHTML = rowsFrom([
           ['navigator.webdriver', x.webdriver, x.webdriver === true],

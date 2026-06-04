@@ -27,9 +27,10 @@ def probe(headed):
             if d.execute_script("return !!window.__hpResult"):
                 break
             time.sleep(0.2)
-        drm = d.execute_script("return window.__hpResult ? window.__hpResult.coreA.drm : null")
+        coreA = d.execute_script("return window.__hpResult ? window.__hpResult.coreA : {}")
         ua = d.execute_script("return navigator.userAgent")
-        return {"claims_chrome": "chrome" in ua.lower(), "drm": drm}
+        return {"claims_chrome": "chrome" in ua.lower(), "drm": coreA.get("drm"),
+                "media": coreA.get("media"), "webglSoftware": (coreA.get("webgl") or {}).get("software")}
     finally:
         d.quit()
 

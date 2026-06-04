@@ -269,6 +269,39 @@
     return out;
   }
 
+  // (A7) ハードウェア・メディア能力（HW オーバーレイ/HW 復号が "実在" するかの代理）。
+  // 実消費者デバイスは H.264/VP9 等を powerEfficient(=HW 復号)で再生でき、HEVC の HW 復号も多い。
+  // headless/VM/エミュレーションは HW 経路が無く powerEfficient:false や未対応になりがち。
+  async function probeMediaCaps() {
+    var mc = navigator.mediaCapabilities;
+    if (!mc || !mc.decodingInfo) return { supported: false };
+    var timeout = function (ms) { return new Promise(function (_, rej) { setTimeout(function () { rej(new Error('mc-timeout')); }, ms); }); };
+    var tests = [
+      ['h264', 'video/mp4; codecs="avc1.42E01E"'],
+      ['vp9', 'video/webm; codecs="vp09.00.10.08"'],
+      ['av1', 'video/mp4; codecs="av01.0.04M.08"'],
+      ['hevc', 'video/mp4; codecs="hvc1.1.6.L93.B0"'],
+    ];
+    var codecs = {};
+    for (var i = 0; i < tests.length; i++) {
+      try {
+        var info = await Promise.race([
+          mc.decodingInfo({ type: 'media-source', video: { contentType: tests[i][1], width: 1280, height: 720, bitrate: 2000000, framerate: 30 } }),
+          timeout(700),
+        ]);
+        codecs[tests[i][0]] = { supported: !!info.supported, smooth: !!info.smooth, powerEfficient: !!info.powerEfficient };
+      } catch (e) { codecs[tests[i][0]] = { supported: false, error: true }; }
+    }
+    var hwAny = false;
+    for (var k in codecs) { if (codecs[k] && codecs[k].powerEfficient) hwAny = true; }
+    return {
+      supported: true,
+      codecs: codecs,
+      hwDecodeAny: hwAny,                                     // どれか1つでも HW 復号
+      hevcHW: !!(codecs.hevc && codecs.hevc.powerEfficient),  // 実消費者デバイスの強い兆候
+    };
+  }
+
   // ===================== aux: 安価なプロパティ痕跡 =====================
   function probeAux() {
     const w = window,
@@ -545,13 +578,14 @@
     const webgl = probeWebGL();
     const scheduling = await probeScheduling();
     const drm = await probeDRM();
+    const media = await probeMediaCaps();
     return {
       schema: 1,
       ts: Date.now(),
       label: null,
       href: location.href,
       aux,
-      coreA: { timer, compute, math, webgl, scheduling, drm },
+      coreA: { timer, compute, math, webgl, scheduling, drm, media },
       coreB: null,
     };
   }
