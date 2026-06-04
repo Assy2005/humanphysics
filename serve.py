@@ -320,6 +320,32 @@ def trap_score(channels):
     return bot, reasons
 
 
+# ===================== 思考-行動の時間署名（受動・協力非依存）=====================
+# 「罠に従わせる」のでなく「避けられない振る舞い」を測る。人間は操作の周りに必ず連続的
+# 微小活動を出す。スクリプトは微小活動ゼロ・高速。LLM agent は「沈黙→孤立操作」を反復。
+def cadence_score(f):
+    if not f:
+        return 0, []
+    actions = f.get("actions") or 0
+    if actions < 1:
+        return 0, []  # 行動が無ければ判定材料なし
+    bot, reasons = 0, []
+    moves = f.get("moves") or 0
+    untrusted = f.get("untrusted") or 0
+    move_rate = f.get("moveRatePerSec") or 0
+    teleport = f.get("teleportActions") or 0
+    big_gaps = f.get("bigGaps") or 0
+    if untrusted > 0:
+        bot += 45; reasons.append("合成入力イベント(isTrusted=false)")
+    if actions >= 2 and moves == 0:
+        bot += 50; reasons.append("操作はあるがマウス/ポインタ移動ゼロ（自動化）")
+    elif actions >= 2 and move_rate < 3 and teleport >= actions:
+        bot += 35; reasons.append("微小活動が乏しく操作が孤立（自動化の兆候）")
+    if actions >= 3 and big_gaps >= 2 and moves <= actions:
+        bot += 30; reasons.append("沈黙→操作の反復（LLMエージェントの思考-行動ケイデンス）")
+    return bot, reasons
+
+
 # ================================== HTTP ====================================
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -398,8 +424,9 @@ class Handler(BaseHTTPRequestHandler):
                 abot, areasons = aggregate_score(agg)              # 横断スコア（velocity）
                 tch = trap_channels(signals.get("sid"))            # AIエージェント・トラップ（知覚-認知）
                 tbot, treasons = trap_score(tch)
-                total = score["botEvidence"] + abot + tbot
-                reasons = score["reasons"] + areasons + treasons
+                cbot, creasons = cadence_score(signals.get("cadence"))  # 思考-行動の時間署名
+                total = score["botEvidence"] + abot + tbot + cbot
+                reasons = score["reasons"] + areasons + treasons + creasons
                 verdict = "bot-likely" if total >= 60 else ("suspect" if total >= 25 else "human-likely")
                 human = max(0, min(100, 100 - total))
                 token = issue_token(verdict, human)
@@ -413,6 +440,12 @@ class Handler(BaseHTTPRequestHandler):
                 tbot, treasons = trap_score(ch)
                 verdict = "bot-likely" if tbot >= 60 else ("suspect" if tbot >= 25 else "human-likely")
                 self._json(200, {"ok": True, "trapped": ch, "verdict": verdict, "reasons": treasons})
+                return
+            if path == "/hp/cadence-check":
+                body = self._read_json()
+                cbot, creasons = cadence_score(body.get("cadence"))
+                verdict = "bot-likely" if cbot >= 60 else ("suspect" if cbot >= 25 else "human-likely")
+                self._json(200, {"ok": True, "botEvidence": cbot, "verdict": verdict, "reasons": creasons})
                 return
             if path == "/hp/check":
                 body = self._read_json()

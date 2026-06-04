@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>思考-行動の時間署名（AIエージェント検知）</title>
+    <style>
+      body { margin: 0; background: #0d1117; color: #c9d1d9; font: 14px/1.7 -apple-system, "Segoe UI", "Yu Gothic UI", sans-serif; max-width: 640px; margin: 30px auto; padding: 0 20px; }
+      h1 { font-size: 18px; } .sub { color: #8b949e; font-size: 13px; }
+      .card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 18px; margin-top: 16px; }
+      button { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 9px 14px; cursor: pointer; margin: 4px; }
+      button.primary { background: #238636; color: #fff; border: 0; font-weight: 600; }
+      input { background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 8px; width: 100%; box-sizing: border-box; margin-top: 6px; }
+      .verdict { font-size: 20px; font-weight: 700; }
+      .human-likely { color: #3fb950; } .suspect { color: #d29922; } .bot-likely { color: #f85149; }
+      ul { padding-left: 18px; } li { color: #d29922; font-size: 13px; }
+      pre { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 10px; font-size: 11.5px; overflow: auto; }
+    </style>
+  </head>
+  <body>
+    <h1>思考-行動の時間署名デモ</h1>
+    <div class="sub">
+      普通に操作してください（マウスを動かす・下のボタンを何度か押す・欄に入力する）。
+      人間は操作の周りに必ず連続的な微小活動を出します。スクリプトやLLMエージェントは
+      「沈黙→孤立操作」になり、微小活動が欠けます。10秒ほど操作してから「判定」を押してください。
+    </div>
+
+    <div class="card">
+      <button id="b1">ボタンA</button><button id="b2">ボタンB</button><button id="b3">ボタンC</button>
+      <input id="t1" placeholder="ここに何か入力してみてください" />
+    </div>
+
+    <div class="card">
+      <button class="primary" id="judge">判定</button>
+      <button id="reset">リセット</button>
+      <div id="verdict" class="verdict" style="margin:8px 0">—</div>
+      <ul id="reasons"></ul>
+      <pre id="raw">操作してから「判定」を押してください。</pre>
+    </div>
+
+    <script src="cadence.js"></script>
+    <script>
+      var $ = function (id) { return document.getElementById(id); };
+      ['b1', 'b2', 'b3'].forEach(function (id) { $(id).addEventListener('click', function () {}); });
+      $('reset').addEventListener('click', function () { window.HumanPhysicsCadence.reset(); $('raw').textContent = 'リセットしました。操作してから判定。'; $('verdict').textContent = '—'; $('reasons').innerHTML = ''; });
+      $('judge').addEventListener('click', async function () {
+        var f = window.HumanPhysicsCadence.features();
+        var r = await fetch('/hp/cadence-check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cadence: f }) }).then(function (x) { return x.json(); });
+        $('raw').textContent = 'features = ' + JSON.stringify(f, null, 2) + '\n\nverdict = ' + JSON.stringify(r, null, 2);
+        var el = $('verdict'); el.className = 'verdict ' + r.verdict;
+        el.textContent = r.verdict === 'human-likely' ? '人間らしい' : r.verdict === 'suspect' ? '要注意' : '自動化/エージェントらしい';
+        $('reasons').innerHTML = (r.reasons || []).map(function (x) { return '<li>' + x + '</li>'; }).join('') || '<li class="sub" style="color:#8b949e">特記なし</li>';
+      });
+    </script>
+  </body>
+</html>
