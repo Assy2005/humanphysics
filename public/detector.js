@@ -254,16 +254,20 @@
     };
     // 一部環境(Electron 等)で requestMediaKeySystemAccess がハングするためタイムアウトを付ける
     var timeout = function (ms) { return new Promise(function (_, rej) { setTimeout(function () { rej(new Error('drm-timeout')); }, ms); }); };
-    var tryKS = async function (ks, r) {
-      try { await Promise.race([navigator.requestMediaKeySystemAccess(ks, cfg(r)), timeout(800)]); return true; } catch (e) { return false; }
+    // 初回 CDM 初期化が遅い実ブラウザを「なし」と誤判定しないよう、基本クエリは余裕を持たせる
+    var tryKS = async function (ks, r, ms) {
+      try { await Promise.race([navigator.requestMediaKeySystemAccess(ks, cfg(r)), timeout(ms)]); return true; }
+      catch (e) { return e.message === 'drm-timeout' ? null : false; } // null=タイムアウト(不明), false=明確に非対応
     };
-    var out = { supported: true, widevine: false, playready: false, widevineRobustness: null };
-    out.widevine = await tryKS('com.widevine.alpha', '');
-    out.playready = await tryKS('com.microsoft.playready.recommendation', '');
+    var out = { supported: true, widevine: false, playready: false, widevineRobustness: null, widevineTimedOut: false };
+    var wv = await tryKS('com.widevine.alpha', '', 3000);
+    out.widevine = wv === true;
+    out.widevineTimedOut = wv === null;
+    out.playready = (await tryKS('com.microsoft.playready.recommendation', '', 1500)) === true;
     if (out.widevine) {
       var levels = ['HW_SECURE_ALL', 'HW_SECURE_DECODE', 'SW_SECURE_DECODE', 'SW_SECURE_CRYPTO'];
       for (var j = 0; j < levels.length; j++) {
-        if (await tryKS('com.widevine.alpha', levels[j])) { out.widevineRobustness = levels[j]; break; }
+        if ((await tryKS('com.widevine.alpha', levels[j], 1500)) === true) { out.widevineRobustness = levels[j]; break; }
       }
     }
     return out;
