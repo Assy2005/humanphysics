@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HumanPhysics 導入デモ — 保護されたフォーム</title>
+    <style>
+      body { margin: 0; background: #0d1117; color: #c9d1d9; font: 14px/1.6 -apple-system, "Segoe UI", "Yu Gothic UI", sans-serif; }
+      main { max-width: 560px; margin: 40px auto; padding: 0 20px; }
+      h1 { font-size: 19px; }
+      .sub { color: #8b949e; font-size: 13px; }
+      form, .panel { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 20px; margin-top: 16px; }
+      label { display: block; font-size: 13px; color: #8b949e; margin: 10px 0 4px; }
+      input { width: 100%; padding: 10px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #c9d1d9; box-sizing: border-box; }
+      .btns { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+      button { border: 0; border-radius: 6px; padding: 10px 16px; font-weight: 600; cursor: pointer; }
+      .primary { background: #238636; color: #fff; }
+      .bot { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; }
+      .verdict { font-size: 20px; font-weight: 700; }
+      .human-likely { color: #3fb950; } .suspect { color: #d29922; } .bot-likely { color: #f85149; }
+      ul { margin: 6px 0 0; padding-left: 18px; } li { color: #d29922; font-size: 12.5px; }
+      pre { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 10px; font-size: 11.5px; overflow: auto; }
+      code { background: #0d1117; padding: 1px 5px; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>サインアップ（HumanPhysics で保護）</h1>
+      <div class="sub">
+        専用ボタン（CAPTCHA）なし。フォームに普通に入力して「登録」を押すだけ。送信時に
+        <b>実行物理＋入力中の自然な挙動</b>をサーバ側で採点し、bot 送信を弾きます。
+      </div>
+
+      <form id="signup" autocomplete="off">
+        <label>お名前</label>
+        <input name="name" type="text" placeholder="山田 太郎" />
+        <label>メール</label>
+        <input name="email" type="email" placeholder="taro@example.com" />
+        <label>パスワード</label>
+        <input name="password" type="password" placeholder="********" />
+        <div class="btns">
+          <button type="submit" class="primary">登録</button>
+          <button type="button" class="bot" id="botBtn">🤖 自動入力で送信（bot を模擬）</button>
+        </div>
+      </form>
+
+      <div class="panel">
+        <div>判定結果（サーバ側）:</div>
+        <div id="verdict" class="verdict" style="margin:6px 0">—</div>
+        <div id="score" class="sub"></div>
+        <ul id="reasons"></ul>
+        <div id="server" class="sub" style="margin-top:8px"></div>
+        <pre id="raw" style="margin-top:10px">送信するとここに結果が出ます。</pre>
+      </div>
+    </main>
+
+    <script src="detector.js"></script>
+    <script src="hp-embed.js"></script>
+    <script>
+      var form = document.getElementById('signup');
+      var $ = function (id) { return document.getElementById(id); };
+
+      async function show(res) {
+        $('raw').textContent = JSON.stringify(res, null, 2);
+        if (!res || !res.ok) {
+          $('verdict').textContent = '検証エラー';
+          $('verdict').className = 'verdict suspect';
+          $('score').textContent = (res && res.error) || '';
+          $('reasons').innerHTML = '';
+          $('server').textContent = '';
+          return;
+        }
+        var label = res.verdict === 'human-likely' ? '人間らしい（送信許可）' : res.verdict === 'suspect' ? '要注意' : 'botらしい（送信ブロック）';
+        $('verdict').textContent = label;
+        $('verdict').className = 'verdict ' + res.verdict;
+        $('score').textContent = 'human score: ' + res.humanScore + ' / 100';
+        $('reasons').innerHTML = (res.reasons || []).map(function (r) { return '<li>' + r + '</li>'; }).join('');
+        // サイトのバックエンドが行う「トークン検証」を模擬
+        if (res.token) {
+          var chk = await fetch('/hp/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: res.token }) }).then(function (r) { return r.json(); });
+          $('server').textContent = 'バックエンドのトークン検証: ' + JSON.stringify(chk);
+        } else {
+          $('server').textContent = '';
+        }
+      }
+
+      HumanPhysics.guardForm(form, { endpoint: '', onResult: show, onFail: show });
+      // 通過後の実送信はデモでは画面遷移させず成功表示のみ
+      form.addEventListener('submit', function (e) { if (form.__hpPassed) e.preventDefault(); });
+
+      // bot 模擬: 値をプログラム的に流し込み（打鍵イベントなし）→ 即送信
+      $('botBtn').addEventListener('click', function () {
+        form.name.value = 'Bot Taro';
+        form.email.value = 'bot@example.com';
+        form.password.value = 'password123';
+        if (form.requestSubmit) form.requestSubmit(); else form.submit();
+      });
+    </script>
+  </body>
+</html>

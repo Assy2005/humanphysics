@@ -18,8 +18,10 @@ CloudFlare / reCAPTCHA とは別路線の、**ボタンを押させない**新�
 | ファイル | 役割 |
 |---|---|
 | `public/detector.js` | 計測ライブラリ。`window.HumanPhysics`。Core A / Core B / aux。 |
+| `public/hp-embed.js` | 導入用レイヤ。`guardForm`/`verify`＋フォーム挙動の受動収集。 |
+| `public/demo.html` | 導入デモ（保護されたサインアップフォーム）。 |
 | `public/index.html` | 研究ハーネス（ダッシュボード＋反応テスト＋エクスポート／送信）。 |
-| `serve.py` | 依存ゼロの配信＋収集サーバ。`POST /collect` → `data/samples.jsonl`。 |
+| `serve.py` | 配信＋API サーバ。`/hp/challenge`・`/hp/verify`（**サーバ側採点**）・`/hp/check`・`/collect`。 |
 | `analyze.py` | human と bot の**分離度(AUC)**を算出。実験 H1/H2 の評価。 |
 | `bot/collect_selenium.py` | （任意）Selenium で bot サンプルを自動生成。 |
 
@@ -41,6 +43,79 @@ python serve.py                 # http://localhost:8000
 
 ブラウザで http://localhost:8000 を開く →（Core A は自動実行）→「反応テスト開始」で Core B →
 ラベルを `human` にして「サーバへ送信」。これを数人 / 数ブラウザで繰り返す。
+
+## Webサイトへの導入手順
+
+既存サイトのフォーム（サインアップ / ログイン / 問い合わせ等）を、CAPTCHA なしで保護できます。
+動くデモ → `python serve.py` 起動後に http://localhost:8000/demo.html
+
+### 1. クライアント: スクリプト2本を読み込む
+
+```html
+<script src="/path/to/detector.js"></script>
+<script src="/path/to/hp-embed.js"></script>
+```
+
+### 2. 保護したいフォームに `data-hp-guard` を付ける（JS不要）
+
+```html
+<form action="/signup" method="post" data-hp-guard data-hp-endpoint="">
+  ...入力欄...
+  <button type="submit">登録</button>
+</form>
+```
+
+送信時に「実行物理＋入力中の自然な挙動」を収集 → `/hp/verify` で**サーバ採点** →
+human なら hidden の `hp_token` を付けて送信、bot なら送信をブロックします。専用ボタンは不要。
+
+JS で細かく制御する場合:
+
+```html
+<script>
+  HumanPhysics.guardForm(document.querySelector('#signup'), {
+    endpoint: '',               // 検証サービスのオリジン（別ドメイン運用なら 'https://hp.example.com'）
+    interactive: false,         // true で「怪しい時の知覚-行動チャレンジ(step-up)」を出す
+    onResult: (r) => console.log('verdict', r.verdict, r.humanScore),
+    onFail:   (r) => alert('自動化の疑いがあります'),
+    policy:   (r) => r.verdict !== 'bot-likely',   // 通過条件（既定: bot-likely 以外は通す）
+  });
+</script>
+```
+
+### 3. サーバ: `hp_token` を検証してから処理する（最重要）
+
+**判定はサーバ側で行い、バックエンドは必ず `hp_token` を検証**してから本処理を実行します
+（クライアントの自己申告スコアは信用しない）。トークンは HMAC 署名＋有効期限付き。
+
+```python
+# 例: signup ハンドラ内で
+import urllib.request, json
+def hp_ok(token):
+    req = urllib.request.Request("http://localhost:8000/hp/check",
+        data=json.dumps({"token": token}).encode(),
+        headers={"Content-Type": "application/json"})
+    res = json.loads(urllib.request.urlopen(req).read())
+    return res.get("valid") and res.get("verdict") != "bot-likely"
+
+# if not hp_ok(request.form["hp_token"]): abort(403)
+```
+
+他言語でも同様: トークンは `"<base64url(payload)>.<hex(hmac_sha256(secret, base64url))>"`。
+`payload` を復号し、HMAC と `exp`（UNIX秒）を検証するだけ。
+
+### デプロイ形態
+
+- **自前ホスト（同一オリジン）**: `serve.py` の `/hp/*`（`issue_challenge / check_challenge / hp_score /
+  issue_token / check_token`）を自分のバックエンドに移植。`endpoint:''` のまま。
+- **検証サービス（別オリジン）**: `serve.py` を専用ドメインで動かし `endpoint:'https://hp.example.com'` を指定。
+  `/hp/*` は CORS 許可済み（本番では `Access-Control-Allow-Origin` を自サイトに限定すること）。
+
+### 注意（red-team 済みの限界）
+
+- `data/secret.key` は**サーバ秘密**。漏れるとトークン偽造可。リポジトリに含めない（`.gitignore` 済み）。
+- 判定は**リスクスコア**であり完全な二値オラクルではない。実機ブラウザ＋OSレベル入力注入＋人間風タイミングの
+  高度な bot は通り得る。重要操作は `interactive:true`（step-up）やレート制限と併用する。
+- 人間の貼付/オートフィルは `input` イベントを発火するため誤検知しない（プログラム的 `.value=` のみ自動化と判定）。
 
 ## 実験プロトコル
 
