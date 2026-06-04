@@ -25,7 +25,9 @@ import hmac
 import json
 import os
 import sys
+import threading
 import time
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -195,6 +197,81 @@ def hp_score(signals):
     return {"humanScore": human, "botEvidence": bot, "verdict": verdict, "reasons": reasons}
 
 
+# ============================ サーバ側集約（横断分析）============================
+# 単発の受動シグナルは弱い。多数リクエストを横断した「同一指紋の頻度(velocity)」「IP集中」
+# 「指紋ローテーション」で、スケールした bot を捕える（＝完全パッシブの本丸）。
+# PoC ゆえ in-memory（本番は Redis/DB）。
+_AGG_LOCK = threading.Lock()
+_EVENTS = deque()        # (ts, fingerprint, ip)
+_AGG_WINDOW = 3600       # 保持秒
+_AGG_CAP = 20000         # メモリ上限
+
+
+def fingerprint(signals):
+    # 安定した受動シグナルから端末を識別（クライアント申告でなくサーバ側で導出）
+    a = signals.get("coreA") or {}
+    aux = signals.get("aux") or {}
+    parts = [
+        aux.get("userAgent", "") or "",
+        (a.get("math") or {}).get("hash", "") or "",
+        (a.get("webgl") or {}).get("renderer", "") or "",
+        str(aux.get("hardwareConcurrency")),
+        str(aux.get("deviceMemory")),
+        ",".join(aux.get("languages") or []),
+        str((a.get("timer") or {}).get("effectiveResolutionMs")),
+    ]
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
+def aggregate(fp, ip):
+    now = time.time()
+    with _AGG_LOCK:
+        while _EVENTS and (now - _EVENTS[0][0] > _AGG_WINDOW or len(_EVENTS) > _AGG_CAP):
+            _EVENTS.popleft()
+        _EVENTS.append((now, fp, ip))
+        fp60 = fp600 = ip60 = 0
+        ipfps = set()
+        for (t, f, i) in _EVENTS:
+            if f == fp and now - t <= 60:
+                fp60 += 1
+            if f == fp and now - t <= 600:
+                fp600 += 1
+            if i == ip:
+                if now - t <= 60:
+                    ip60 += 1
+                if now - t <= 600:
+                    ipfps.add(f)
+    return {"fingerprint": fp, "fp_60s": fp60, "fp_600s": fp600, "ip_60s": ip60, "ip_distinct_fps_600s": len(ipfps)}
+
+
+def aggregate_score(agg):
+    bot, reasons = 0, []
+    if agg["fp_60s"] >= 40:
+        bot += 70; reasons.append("同一指紋が60秒で%d回（自動化）" % agg["fp_60s"])
+    elif agg["fp_60s"] >= 15:
+        bot += 30; reasons.append("同一指紋が60秒で%d回（高頻度）" % agg["fp_60s"])
+    if agg["ip_60s"] >= 80:
+        bot += 40; reasons.append("同一IPが60秒で%d回" % agg["ip_60s"])
+    if agg["ip_distinct_fps_600s"] >= 12:
+        bot += 30; reasons.append("同一IPから指紋%d種（ローテーションの疑い）" % agg["ip_distinct_fps_600s"])
+    return bot, reasons
+
+
+def stats_snapshot():
+    now = time.time()
+    fpc, ipc = defaultdict(int), defaultdict(int)
+    with _AGG_LOCK:
+        for (t, f, i) in _EVENTS:
+            if now - t <= 600:
+                fpc[f] += 1
+                ipc[i] += 1
+    return {
+        "window_s": 600, "events": len(_EVENTS),
+        "top_fingerprints": sorted(fpc.items(), key=lambda x: -x[1])[:10],
+        "top_ips": sorted(ipc.items(), key=lambda x: -x[1])[:10],
+    }
+
+
 # ================================== HTTP ====================================
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -231,6 +308,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/hp/challenge":
             self._json(200, issue_challenge())
             return
+        if path == "/hp/stats":
+            self._json(200, stats_snapshot())
+            return
         if path == "/":
             path = "/index.html"
         target = os.path.normpath(os.path.join(PUBLIC, path.lstrip("/")))
@@ -252,9 +332,18 @@ class Handler(BaseHTTPRequestHandler):
                 if not ok:
                     self._json(403, {"ok": False, "error": why})
                     return
-                score = hp_score(body.get("signals"))
-                token = issue_token(score["verdict"], score["humanScore"])
-                self._json(200, {"ok": True, "token": token, **score})
+                signals = body.get("signals") or {}
+                score = hp_score(signals)                          # 単発スコア
+                agg = aggregate(fingerprint(signals), self.client_address[0])
+                abot, areasons = aggregate_score(agg)              # 横断スコア
+                total = score["botEvidence"] + abot
+                reasons = score["reasons"] + areasons
+                verdict = "bot-likely" if total >= 60 else ("suspect" if total >= 25 else "human-likely")
+                human = max(0, min(100, 100 - total))
+                token = issue_token(verdict, human)
+                self._json(200, {"ok": True, "token": token, "verdict": verdict,
+                                 "humanScore": human, "botEvidence": total,
+                                 "reasons": reasons, "aggregate": agg})
                 return
             if path == "/hp/check":
                 body = self._read_json()
