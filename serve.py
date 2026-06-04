@@ -28,6 +28,7 @@ import sys
 import threading
 import time
 from collections import defaultdict, deque
+from urllib.parse import parse_qs
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -277,6 +278,46 @@ def stats_snapshot():
     }
 
 
+# ===================== AIエージェント・トラップ（知覚-認知層）=====================
+# 人間に不可視のトラップ（不可視リンク/自然言語指示/ハニーポット欄）を踏んだ事実を記録。
+# 踏める＝非人間の知覚・認知。誤検知ほぼゼロ（人間は物理的に触れない）。環境を測らないので
+# 「実ブラウザ上の AI エージェント」も捕える＝物理層の天井の向こう側。
+_TRAP_LOCK = threading.Lock()
+_TRAPS = {}  # sid -> {"channels": set, "ip": str, "ts": float}
+
+
+def record_trap(sid, channel, ip):
+    if not sid or channel not in ("dom", "llm", "field"):
+        return
+    now = time.time()
+    with _TRAP_LOCK:
+        if len(_TRAPS) > 5000:
+            _TRAPS.clear()  # PoC: 単純な上限
+        e = _TRAPS.get(sid)
+        if not e:
+            e = {"channels": set(), "ip": ip, "ts": now}
+            _TRAPS[sid] = e
+        e["channels"].add(channel)
+        e["ts"] = now
+
+
+def trap_channels(sid):
+    with _TRAP_LOCK:
+        e = _TRAPS.get(sid)
+        return sorted(e["channels"]) if e else []
+
+
+def trap_score(channels):
+    bot, reasons = 0, []
+    if "llm" in channels:
+        bot += 70; reasons.append("不可視のプロンプト指示に追従（AIエージェントの痕跡）")
+    if "dom" in channels:
+        bot += 50; reasons.append("不可視リンクへのアクセス（DOM列挙botの痕跡）")
+    if "field" in channels:
+        bot += 50; reasons.append("ハニーポット欄に入力（自動入力の痕跡）")
+    return bot, reasons
+
+
 # ================================== HTTP ====================================
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -316,6 +357,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/hp/stats":
             self._json(200, stats_snapshot())
             return
+        if path == "/hp/trap":
+            q = parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            record_trap((q.get("s") or [""])[0], (q.get("c") or [""])[0], self.client_address[0])
+            self._send(204)  # 何食わぬ顔で（agent に検知を悟らせない）
+            return
         if path == "/":
             path = "/index.html"
         target = os.path.normpath(os.path.join(PUBLIC, path.lstrip("/")))
@@ -338,17 +384,26 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(403, {"ok": False, "error": why})
                     return
                 signals = body.get("signals") or {}
-                score = hp_score(signals)                          # 単発スコア
+                score = hp_score(signals)                          # 単発スコア（物理）
                 agg = aggregate(fingerprint(signals), self.client_address[0])
-                abot, areasons = aggregate_score(agg)              # 横断スコア
-                total = score["botEvidence"] + abot
-                reasons = score["reasons"] + areasons
+                abot, areasons = aggregate_score(agg)              # 横断スコア（velocity）
+                tch = trap_channels(signals.get("sid"))            # AIエージェント・トラップ（知覚-認知）
+                tbot, treasons = trap_score(tch)
+                total = score["botEvidence"] + abot + tbot
+                reasons = score["reasons"] + areasons + treasons
                 verdict = "bot-likely" if total >= 60 else ("suspect" if total >= 25 else "human-likely")
                 human = max(0, min(100, 100 - total))
                 token = issue_token(verdict, human)
                 self._json(200, {"ok": True, "token": token, "verdict": verdict,
                                  "humanScore": human, "botEvidence": total,
-                                 "reasons": reasons, "aggregate": agg})
+                                 "reasons": reasons, "aggregate": agg, "traps": tch})
+                return
+            if path == "/hp/agent-check":
+                body = self._read_json()
+                ch = trap_channels(body.get("sid"))
+                tbot, treasons = trap_score(ch)
+                verdict = "bot-likely" if tbot >= 60 else ("suspect" if tbot >= 25 else "human-likely")
+                self._json(200, {"ok": True, "trapped": ch, "verdict": verdict, "reasons": treasons})
                 return
             if path == "/hp/check":
                 body = self._read_json()

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AIエージェント検知デモ（知覚-認知層）</title>
+    <style>
+      body { margin: 0; background: #0d1117; color: #c9d1d9; font: 14px/1.7 -apple-system, "Segoe UI", "Yu Gothic UI", sans-serif; max-width: 620px; margin: 30px auto; padding: 0 20px; }
+      h1 { font-size: 18px; } .sub { color: #8b949e; font-size: 13px; }
+      .card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 18px; margin-top: 16px; }
+      button { background: #238636; color: #fff; border: 0; border-radius: 6px; padding: 9px 16px; font-weight: 600; cursor: pointer; }
+      .verdict { font-size: 20px; font-weight: 700; }
+      .human-likely { color: #3fb950; } .suspect { color: #d29922; } .bot-likely { color: #f85149; }
+      ul { padding-left: 18px; } li { color: #d29922; font-size: 13px; }
+      code { background: #0d1117; padding: 1px 5px; border-radius: 4px; }
+      pre { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 10px; font-size: 11.5px; overflow: auto; }
+    </style>
+  </head>
+  <body>
+    <h1>記事ページ（AIエージェント検知のデモ）</h1>
+    <div class="sub">
+      このページには人間に<b>不可視のトラップ</b>が仕込まれています。人間が普通に読んで「続きを見る」を押しても
+      何も起きません。しかし DOM を列挙する bot や、ページ文面の指示を読んで従う AI エージェントは、
+      不可視の罠を踏み、サーバに記録されます。
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">サンプル記事</h3>
+      <p>本日の更新情報です。詳細は下のボタンからご覧ください。</p>
+      <button id="more">続きを見る</button>
+    </div>
+
+    <div class="card">
+      <div>このセッションの判定（サーバ側・トラップ記録）:</div>
+      <div id="verdict" class="verdict" style="margin:6px 0">—</div>
+      <ul id="reasons"></ul>
+      <button id="check">判定を確認</button>
+      <div class="sub" style="margin-top:8px">sid: <code id="sid"></code></div>
+      <pre id="raw"></pre>
+    </div>
+
+    <script src="agent-trap.js"></script>
+    <script>
+      var $ = function (id) { return document.getElementById(id); };
+      $('sid').textContent = window.HumanPhysicsTrap.sid;
+      $('more').addEventListener('click', function () { alert('（デモ）続きはありません'); });
+      $('check').addEventListener('click', async function () {
+        var r = await fetch('/hp/agent-check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sid: window.HumanPhysicsTrap.sid }) }).then(function (x) { return x.json(); });
+        $('raw').textContent = JSON.stringify(r, null, 2);
+        var el = $('verdict'); el.className = 'verdict ' + r.verdict;
+        el.textContent = r.verdict === 'human-likely' ? '人間らしい（トラップ未作動）' : r.verdict === 'suspect' ? '要注意' : 'AIエージェント/bot らしい';
+        $('reasons').innerHTML = (r.reasons || []).map(function (x) { return '<li>' + x + '</li>'; }).join('') || '<li class="sub" style="color:#8b949e">トラップ作動なし</li>';
+      });
+    </script>
+  </body>
+</html>
