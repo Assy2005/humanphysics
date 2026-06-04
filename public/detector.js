@@ -496,6 +496,108 @@
     return { trials, summary, input: rec };
   }
 
+  // ===================== Core B v2: モーション知覚（DOM/スクショ耐性）=====================
+  // ランダムドット運動(RDK)。一部のドットだけが一方向にコヒーレントに動く。
+  // 答え(方向)は canvas のピクセル"運動"にしか無い → DOM即読みも単一スクショも不可、
+  // 時間的に統合して初めて知覚できる。0%コヒーレンス=No-Go。難易度(coherence)も変える。
+  async function runMotionChallenge(opts) {
+    opts = opts || {};
+    var rounds = opts.rounds || 6;
+    var stage = opts.stage;
+    var onProgress = opts.onProgress || function () {};
+    if (!stage) throw new Error('runMotionChallenge: opts.stage (DOM要素) が必要です');
+
+    var W = 320, H = 240, N = 130, speed = 2.4, durMs = 1400, graceMs = 900;
+    stage.innerHTML = '';
+    var canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    canvas.style.cssText = 'background:#000;border-radius:8px;display:block;margin:0 auto';
+    stage.appendChild(canvas);
+    var ctx = canvas.getContext('2d');
+    var DIRS = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] };
+    var KEYMAP = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down', ' ': 'none', Spacebar: 'none' };
+    var dirNames = ['left', 'right', 'up', 'down'];
+    var cohSeq = [0.5, 0.28, 0.14, 0.5, 0.28, 0.14];
+    var trials = [];
+
+    for (var i = 0; i < rounds; i++) {
+      var isNoGo = Math.random() < 0.2;
+      var coh = isNoGo ? 0 : cohSeq[i % cohSeq.length];
+      var dir = isNoGo ? 'none' : dirNames[(Math.random() * 4) | 0];
+      var dvec = isNoGo ? null : DIRS[dir];
+      var dots = new Array(N);
+      for (var d = 0; d < N; d++) dots[d] = [Math.random() * W, Math.random() * H];
+
+      onProgress({ phase: 'gap', index: i, rounds: rounds });
+      ctx.clearRect(0, 0, W, H);
+      await wait(600 + Math.random() * 700);
+      onProgress({ phase: 'motion', index: i, rounds: rounds });
+
+      var resp = null, onset = null, raf = null;
+      var onKey = function (e) {
+        var m = KEYMAP[e.key];
+        if (m === undefined || resp) return;
+        resp = { mapped: m, t: nowMs(), isTrusted: e.isTrusted };
+      };
+      window.addEventListener('keydown', onKey, true);
+      var start = nowMs();
+      await new Promise(function (done) {
+        function frame() {
+          for (var k = 0; k < N; k++) {
+            if (dvec && Math.random() < coh) { dots[k][0] += dvec[0] * speed; dots[k][1] += dvec[1] * speed; }
+            else { dots[k][0] = Math.random() * W; dots[k][1] = Math.random() * H; }
+            if (dots[k][0] < 0) dots[k][0] += W; else if (dots[k][0] >= W) dots[k][0] -= W;
+            if (dots[k][1] < 0) dots[k][1] += H; else if (dots[k][1] >= H) dots[k][1] -= H;
+          }
+          ctx.clearRect(0, 0, W, H);
+          ctx.fillStyle = '#fff';
+          for (var j = 0; j < N; j++) ctx.fillRect(dots[j][0] | 0, dots[j][1] | 0, 3, 3);
+          if (onset === null) onset = nowMs();
+          if (resp || nowMs() - start > durMs) { done(); return; }
+          raf = requestAnimationFrame(frame);
+        }
+        raf = requestAnimationFrame(frame);
+      });
+      if (raf) cancelAnimationFrame(raf);
+      if (!resp) { // 運動停止後の猶予
+        ctx.clearRect(0, 0, W, H);
+        await new Promise(function (done) {
+          var to = setTimeout(done, graceMs);
+          var iv = setInterval(function () { if (resp) { clearTimeout(to); clearInterval(iv); done(); } }, 20);
+        });
+      }
+      window.removeEventListener('keydown', onKey, true);
+
+      var pressedDir = !!(resp && resp.mapped !== 'none');
+      trials.push({
+        index: i, dir: dir, coherence: coh, isNoGo: isNoGo,
+        responded: !!resp, mapped: resp ? resp.mapped : null,
+        latencyMs: (resp && onset != null) ? round(resp.t - onset, 1) : null,
+        isTrusted: resp ? resp.isTrusted : null,
+        correct: isNoGo ? !pressedDir : !!(resp && resp.mapped === dir),
+        falseAlarm: isNoGo && pressedDir,
+      });
+      ctx.clearRect(0, 0, W, H);
+      await wait(300);
+    }
+
+    var goT = trials.filter(function (t) { return !t.isNoGo; });
+    var noGoT = trials.filter(function (t) { return t.isNoGo; });
+    var lat = stats(goT.filter(function (t) { return t.latencyMs != null; }).map(function (t) { return t.latencyMs; }));
+    return {
+      trials: trials,
+      summary: {
+        rounds: rounds,
+        accuracyGo: goT.length ? round(goT.filter(function (t) { return t.correct; }).length / goT.length, 3) : null,
+        noGoCount: noGoT.length,
+        noGoFalseAlarms: noGoT.filter(function (t) { return t.falseAlarm; }).length,
+        latency: lat,
+        belowHumanFloor: trials.filter(function (t) { return t.latencyMs != null && t.latencyMs < REACTION_FLOOR_MS; }).length,
+        untrustedResponses: trials.filter(function (t) { return t.isTrusted === false; }).length,
+      },
+    };
+  }
+
   // ===================== スコアリング（透明・ルールベース）=====================
   // PoC の目的は「分離が出るか」の観察。判定は解釈可能に保つ。
   function computeVerdict(result) {
@@ -604,7 +706,8 @@
 
   window.HumanPhysics = {
     runPassive, // Core A + aux のみ（無操作）
-    runReactionTask, // Core B（要 stage 要素）
+    runReactionTask, // Core B v1（要 stage 要素）
+    runMotionChallenge, // Core B v2: モーション知覚（DOM/スクショ耐性）
     computeVerdict,
     _internal: { stats, probeAux, probeTimer, probeCompute, probeMathPrecision, probeWebGL, probeScheduling },
     REACTION_FLOOR_MS,
