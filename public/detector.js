@@ -537,6 +537,14 @@
       bot += 10;
       reasons.push('計算ジッタ cv=0（きれいすぎ）');
     }
+    // DRM/CDM アテステーション: Chrome系を名乗るのに Widevine も PlayReady も皆無
+    // = 自動化Chromium / Chrome-for-Testing / headless の兆候（中重み・誤検知回避のため timeout は除外）
+    var drm = a.drm || {};
+    var uaStr = (result.aux && result.aux.userAgent) || '';
+    if (/chrome|crios|edg|opr/i.test(uaStr) && drm.supported && drm.widevine === false && !drm.widevineTimedOut && drm.playready === false) {
+      bot += 25;
+      reasons.push('Chrome系UAだが DRM(CDM)が皆無 — 自動化/Chromium の兆候');
+    }
 
     const b = result.coreB;
     if (b && b.summary) {

@@ -143,6 +143,14 @@ def hp_score(signals):
     if webgl.get("supported") and webgl.get("software"):
         bot += 35; reasons.append("WebGL ソフトレンダラ: %s" % webgl.get("renderer"))
 
+    # DRM/CDM アテステーション: Chrome系を名乗るのに Widevine も PlayReady も皆無（timeout 除外）
+    drm = _path(signals, "coreA.drm") or {}
+    ua = (aux.get("userAgent") or "").lower()
+    chrome_family = ("chrome" in ua or "crios" in ua or "edg" in ua or "opr" in ua)
+    if (chrome_family and drm.get("supported") and drm.get("widevine") is False
+            and not drm.get("widevineTimedOut") and drm.get("playready") is False):
+        bot += 25; reasons.append("Chrome系UAだが DRM(CDM) 皆無 — 自動化/Chromium の兆候")
+
     # 行動シグナル（フォーム入力中に受動収集。ボタン不要）
     beh = signals.get("behavior") or {}
     if beh:
