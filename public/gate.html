@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>確認しています…</title>
+    <style>
+      html, body { height: 100%; margin: 0; }
+      body { background: #0d1117; color: #c9d1d9; font: 14px/1.6 -apple-system, "Segoe UI", "Yu Gothic UI", sans-serif; display: flex; align-items: center; justify-content: center; }
+      #hp-gate { text-align: center; }
+      .ring { width: 46px; height: 46px; margin: 0 auto 16px; border: 4px solid #21262d; border-top-color: #58a6ff; border-radius: 50%; animation: spin 0.9s linear infinite; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .muted { color: #8b949e; font-size: 12.5px; }
+    </style>
+  </head>
+  <body>
+    <div id="hp-gate">
+      <div class="ring"></div>
+      <div>アクセスを確認しています…</div>
+      <div class="muted">数秒お待ちください（ブラウザで簡単な計算を実行しています）</div>
+    </div>
+
+    <!-- ▼ セットアップはここだけ: dest をあなたの本体ファイルに -->
+    <script>
+      window.HP_GATE_CONFIG = {
+        dest: 'home.html',   // 通過後に表示する本体（あなたの元 index.html）
+        powZeros: 4,         // 計算難易度（重くしたいなら 5）
+        // verifyEndpoint: '/hp/gate-verify',  // ← 本気のブロックはサーバ検証を有効化
+      };
+    </script>
+    <script src="detector.js"></script>
+    <script src="hp-gate.js"></script>
+    <script>
+      HPGate.run(window.HP_GATE_CONFIG);
+    </script>
+  </body>
+</html>

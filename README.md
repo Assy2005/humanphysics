@@ -20,6 +20,8 @@ CloudFlare / reCAPTCHA とは別路線の、**ボタンを押させない**新�
 | `public/detector.js` | 計測ライブラリ。`window.HumanPhysics`。Core A / Core B / aux。 |
 | `public/hp-embed.js` | 導入用レイヤ。`guardForm`/`verify`＋フォーム挙動の受動収集。 |
 | `public/demo.html` | 導入デモ（保護されたサインアップフォーム）。 |
+| `public/hp-gate.js` | サイト全体ゲート（SHA-256 PoW＋物理検知、**サーバ不要**）。 |
+| `public/gate.html` / `public/home.html` | ゲート入口とサンプル本体（静的ドロップイン例）。 |
 | `public/index.html` | 研究ハーネス（ダッシュボード＋反応テスト＋エクスポート／送信）。 |
 | `serve.py` | 配信＋API サーバ。`/hp/challenge`・`/hp/verify`（**サーバ側採点**）・`/hp/check`・`/collect`。 |
 | `analyze.py` | human と bot の**分離度(AUC)**を算出。実験 H1/H2 の評価。 |
@@ -44,7 +46,39 @@ python serve.py                 # http://localhost:8000
 ブラウザで http://localhost:8000 を開く →（Core A は自動実行）→「反応テスト開始」で Core B →
 ラベルを `human` にして「サーバへ送信」。これを数人 / 数ブラウザで繰り返す。
 
-## Webサイトへの導入手順
+## サイト全体をゲートする（サーバ不要・静的ドロップイン）
+
+```
+アクセス → gate.html → 物理検知 + Proof-of-Work → 通過 / ブロック → 本体(home.html)
+```
+
+`serve.py` を動かさず、**静的ファイルを置くだけ**でサイト全体に検問を挟みます。PoW（ブラウザ上の計算）で
+全アクセスにコストを課し、JS 非実行・安価な bot を弾きます。デモ → http://localhost:8000/gate.html
+
+### セットアップ（4ステップ）
+
+1. `detector.js` `hp-gate.js` `gate.html` をホスティングに置く。
+2. 既存の `index.html` を `home.html` にリネーム（＝あなたの本体）。
+3. `gate.html` を `index.html` にリネーム（＝新しい入口）。`gate.html` 内の `dest` を本体に合わせる。
+4. 本体 `home.html` の `<head>` 先頭に1行入れる:
+
+```html
+<script>if(sessionStorage.getItem('hp_pass')!=='1')location.replace('index.html')</script>
+```
+
+設定は `gate.html` 内の `HP_GATE_CONFIG`（`dest` と難易度 `powZeros`）だけ。
+
+### ⚠️ 正直な限界（必読）
+
+完全静的＝**判定はクライアント側**なので、JS を読めば原理的に突破できる（静的ホスティングは本体ファイルへの
+直接アクセスを隠せない）。これは「**JS 非実行/安価な bot を弾き、全員に計算コストを課す**」*フィルタ/抑止*で
+あり金庫ではない（Anubis 等の「ブラウザを確認しています」画面と同型）。
+
+**本気のブロック**が要るなら `gate.html` の `verifyEndpoint` にサーバーレス関数（Cloudflare Workers /
+Vercel / Netlify Functions 等）を指定し、そこで PoW と署名を検証して署名トークンを発行 → 本体配信を
+トークンでゲートする（＝下の「フォーム単位で保護する」と同じ土台）。
+
+## フォーム単位で保護する（サーバ側判定）
 
 既存サイトのフォーム（サインアップ / ログイン / 問い合わせ等）を、CAPTCHA なしで保護できます。
 動くデモ → `python serve.py` 起動後に http://localhost:8000/demo.html

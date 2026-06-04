@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <!-- ▼ これ1行が本体の保護: 未通過なら入口(ゲート)へ戻す。<head> 先頭に置くこと -->
+    <script>
+      if (sessionStorage.getItem('hp_pass') !== '1') location.replace('gate.html');
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>本体ページ（保護済み）</title>
+    <style>
+      body { background: #0d1117; color: #c9d1d9; font: 15px/1.7 -apple-system, "Segoe UI", "Yu Gothic UI", sans-serif; max-width: 640px; margin: 60px auto; padding: 0 20px; }
+      h1 { color: #3fb950; }
+      code { background: #161b22; padding: 2px 6px; border-radius: 4px; }
+      .card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 20px; margin-top: 16px; }
+      button { padding: 9px 16px; border: 0; border-radius: 6px; background: #21262d; color: #c9d1d9; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <h1>✓ ようこそ</h1>
+    <p>
+      これは<strong>あなたの本来の <code>index.html</code> 相当</strong>のページです。
+      ゲート（<code>gate.html</code>）の物理検知＋Proof-of-Work を通過した訪問者だけがここに到達します。
+    </p>
+    <div class="card">
+      <p class="muted">デモ用: 通過フラグを消して入口に戻る</p>
+      <button onclick="sessionStorage.removeItem('hp_pass'); location.replace('gate.html');">ゲートに戻る</button>
+    </div>
+  </body>
+</html>
