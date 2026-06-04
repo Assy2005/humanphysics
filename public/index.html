@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HumanPhysics — Physics over Properties (PoC)</title>
+    <style>
+      :root {
+        --bg: #0d1117;
+        --panel: #161b22;
+        --border: #30363d;
+        --fg: #c9d1d9;
+        --muted: #8b949e;
+        --green: #3fb950;
+        --yellow: #d29922;
+        --red: #f85149;
+        --accent: #58a6ff;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font: 14px/1.6 -apple-system, "Segoe UI", "Yu Gothic UI", sans-serif;
+      }
+      header { padding: 18px 24px; border-bottom: 1px solid var(--border); }
+      h1 { font-size: 18px; margin: 0; }
+      .sub { color: var(--muted); font-size: 13px; margin-top: 4px; }
+      main { max-width: 980px; margin: 0 auto; padding: 20px; }
+      .row { display: flex; gap: 16px; flex-wrap: wrap; }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 16px;
+        flex: 1 1 300px;
+      }
+      .panel h2 { font-size: 14px; margin: 0 0 10px; color: var(--accent); }
+      .verdict { font-size: 28px; font-weight: 700; }
+      .verdict.human-likely { color: var(--green); }
+      .verdict.suspect { color: var(--yellow); }
+      .verdict.bot-likely { color: var(--red); }
+      .score { font-size: 13px; color: var(--muted); }
+      table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+      td { padding: 3px 6px; border-bottom: 1px solid #21262d; vertical-align: top; }
+      td.k { color: var(--muted); white-space: nowrap; width: 45%; }
+      td.v { font-family: "Cascadia Code", Consolas, monospace; }
+      .flag { color: var(--red); }
+      .ok { color: var(--green); }
+      ul.reasons { margin: 8px 0 0; padding-left: 18px; }
+      ul.reasons li { color: var(--yellow); font-size: 12.5px; }
+      button {
+        background: var(--accent);
+        color: #0d1117;
+        border: 0;
+        border-radius: 6px;
+        padding: 9px 16px;
+        font-weight: 600;
+        cursor: pointer;
+        font-size: 13px;
+      }
+      button.secondary { background: #21262d; color: var(--fg); border: 1px solid var(--border); }
+      button:disabled { opacity: 0.5; cursor: default; }
+      .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 14px 0; }
+      select, input { background: #0d1117; color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 7px; }
+      #stage {
+        height: 220px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #0d1117;
+        border: 1px dashed var(--border);
+        border-radius: 8px;
+        margin-top: 10px;
+        user-select: none;
+      }
+      .hp-fix { font-size: 40px; color: var(--muted); }
+      .hp-stim { font-size: 90px; color: var(--accent); font-weight: 700; }
+      .hint { color: var(--muted); font-size: 12.5px; }
+      pre {
+        background: #0d1117;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 12px;
+        overflow: auto;
+        max-height: 360px;
+        font-size: 11.5px;
+      }
+      .status { font-size: 12.5px; color: var(--muted); margin-left: auto; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>HumanPhysics — Physics over Properties <span class="hint">PoC</span></h1>
+      <div class="sub">
+        性質(properties)ではなく実行と操作の物理(physics)でbotを見分ける研究計器。
+        ページを開くと Core A（無操作）が自動実行されます。
+      </div>
+    </header>
+
+    <main>
+      <div class="row">
+        <div class="panel" style="flex: 1 1 220px">
+          <h2>判定</h2>
+          <div id="verdict" class="verdict">…計測中</div>
+          <div id="score" class="score"></div>
+          <ul id="reasons" class="reasons"></ul>
+        </div>
+        <div class="panel" style="flex: 2 1 480px">
+          <h2>Core B — 知覚-行動タイミング（最小操作）</h2>
+          <div class="hint">
+            「開始」を押すと、画面に <b>◀ / ▶</b> が数回ランダムに出ます。出た向きの矢印キー
+            （←/→）をできるだけ速く押してください。これは反応の<b>遅延分布・因果・入力真正性</b>を測ります。
+          </div>
+          <div class="controls">
+            <button id="startB">反応テスト開始</button>
+            <span id="bstatus" class="status"></span>
+          </div>
+          <div id="stage" tabindex="0">準備OK</div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <label class="hint">ラベル:
+          <select id="label">
+            <option value="">未ラベル</option>
+            <option value="human">human（人間）</option>
+            <option value="bot">bot（自動化）</option>
+          </select>
+        </label>
+        <button id="exportBtn" class="secondary">JSON をダウンロード</button>
+        <button id="sendBtn" class="secondary">サーバへ送信（/collect）</button>
+        <button id="rerunBtn" class="secondary">Core A 再計測</button>
+        <span id="sendStatus" class="status"></span>
+      </div>
+
+      <div class="row">
+        <div class="panel"><h2>Core A — 実行物理</h2><table id="coreA"></table></div>
+        <div class="panel"><h2>aux — プロパティ痕跡（低重み）</h2><table id="aux"></table></div>
+      </div>
+
+      <div class="panel">
+        <h2>生データ（エクスポート対象）</h2>
+        <pre id="raw">…</pre>
+      </div>
+    </main>
+
+    <script src="detector.js"></script>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const params = new URLSearchParams(location.search);
+      let RESULT = null;
+
+      function fmt(v) {
+        if (v == null) return '<span class="hint">null</span>';
+        if (typeof v === 'object') return JSON.stringify(v);
+        return String(v);
+      }
+      function rowsFrom(pairs) {
+        return pairs
+          .map(([k, v, flag]) => {
+            const cls = flag === true ? ' class="v flag"' : flag === false ? ' class="v ok"' : ' class="v"';
+            return '<tr><td class="k">' + k + '</td><td' + cls + '>' + fmt(v) + '</td></tr>';
+          })
+          .join('');
+      }
+
+      function renderVerdict() {
+        const v = HumanPhysics.computeVerdict(RESULT);
+        RESULT.score = v;
+        const el = $('verdict');
+        el.className = 'verdict ' + v.verdict;
+        el.textContent =
+          v.verdict === 'human-likely' ? '人間らしい' : v.verdict === 'suspect' ? '要注意' : 'botらしい';
+        $('score').textContent =
+          'human score: ' + v.humanScore + ' / 100   （bot証拠: ' + v.botEvidence + '）';
+        $('reasons').innerHTML = v.reasons.length
+          ? v.reasons.map((r) => '<li>' + r + '</li>').join('')
+          : '<li class="hint" style="color:var(--muted)">特記すべき bot 証拠なし</li>';
+      }
+
+      function renderTables() {
+        const a = RESULT.coreA,
+          x = RESULT.aux;
+        $('coreA').innerHTML = rowsFrom([
+          ['timer 実効分解能(ms)', a.timer.effectiveResolutionMs],
+          ['timer δ中央値(ms)', a.timer.deltaStats.median],
+          ['int スループット(iter/ms)', a.compute.intThroughput],
+          ['float スループット(iter/ms)', a.compute.floatThroughput],
+          ['int/float 比', a.compute.intOverFloatRatio],
+          ['計算ジッタ cv (int)', a.compute.int.stats.cv],
+          ['Math 精度ハッシュ', a.math.hash],
+          ['WebGL renderer', a.webgl.renderer],
+          ['WebGL ソフトレンダラ', a.webgl.software, a.webgl.software === true],
+          ['WebGL 描画(ms,中央値)', a.webgl.drawMs ? a.webgl.drawMs.median : null],
+          ['rAF間隔(ms,中央値)', a.scheduling.raf.median],
+          ['setTimeout0(ms,中央値)', a.scheduling.setTimeout0.median],
+        ]);
+        $('aux').innerHTML = rowsFrom([
+          ['navigator.webdriver', x.webdriver, x.webdriver === true],
+          ['Headless UA', x.headlessUA, x.headlessUA === true],
+          ['automation グローバル', x.automationGlobals.length ? x.automationGlobals.join(', ') : '(なし)', x.automationGlobals.length > 0],
+          ['CDP red-pill 発火', x.cdpStackGetter, x.cdpStackGetter === true],
+          ['エンジン詐称兆候', x.engineUAMismatch, x.engineUAMismatch === true],
+          ['languages 空', x.languagesEmpty, x.languagesEmpty === true],
+          ['vendor', x.vendor],
+          ['productSub', x.productSub],
+          ['hardwareConcurrency', x.hardwareConcurrency],
+          ['plugins 数', x.pluginsLength],
+        ]);
+        $('raw').textContent = JSON.stringify(RESULT, null, 2);
+      }
+
+      function renderAll() {
+        RESULT.label = $('label').value || RESULT.label || null;
+        renderVerdict();
+        renderTables();
+        window.__hpResult = RESULT; // 自動化ツール用アクセサ
+      }
+
+      async function runPassive() {
+        $('verdict').textContent = '…Core A 計測中';
+        RESULT = await HumanPhysics.runPassive();
+        if (params.get('label')) RESULT.label = params.get('label');
+        renderAll();
+      }
+
+      // --- Core B ---
+      $('startB').addEventListener('click', async () => {
+        $('startB').disabled = true;
+        const stage = $('stage');
+        stage.focus();
+        const coreB = await HumanPhysics.runReactionTask({
+          rounds: 6,
+          stage,
+          onProgress: (p) => {
+            $('bstatus').textContent =
+              p.phase === 'wait'
+                ? '試行 ' + (p.index + 1) + '/' + p.rounds + '：待機中…'
+                : '反応してください！';
+          },
+        });
+        coreB.input = {
+          moves: coreB.input.moves,
+          clicks: coreB.input.clicks,
+          keydowns: coreB.input.keydowns,
+          untrusted: coreB.input.untrusted,
+          moveIntervalStats: coreB.input.moveIntervalStats,
+        };
+        RESULT.coreB = coreB;
+        $('bstatus').textContent =
+          '完了：応答 ' + coreB.summary.responded + '/' + coreB.summary.rounds +
+          '、正答率 ' + coreB.summary.accuracy + '、中央値 ' + (coreB.summary.latency.median ?? '-') + 'ms';
+        $('startB').disabled = false;
+        renderAll();
+      });
+
+      $('label').addEventListener('change', () => RESULT && renderAll());
+      $('rerunBtn').addEventListener('click', runPassive);
+
+      $('exportBtn').addEventListener('click', () => {
+        const blob = new Blob([JSON.stringify(RESULT, null, 2)], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'hp-' + (RESULT.label || 'sample') + '-' + RESULT.ts + '.json';
+        a.click();
+      });
+
+      $('sendBtn').addEventListener('click', async () => {
+        try {
+          $('sendStatus').textContent = '送信中…';
+          const res = await fetch('/collect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(RESULT),
+          });
+          $('sendStatus').textContent = res.ok ? '送信OK（data/samples.jsonl に追記）' : '送信失敗: ' + res.status;
+        } catch (e) {
+          $('sendStatus').textContent = '送信エラー（python serve.py で起動していますか？）: ' + e;
+        }
+      });
+
+      // 自動化ツール用: パッシブ実行 → 結果を返す
+      window.__hpRun = async function () {
+        await runPassive();
+        return window.__hpResult;
+      };
+      // 自動化ツール用: Core B を起動（収集側が合成キーイベントを dispatch して使う）
+      window.__hpRunReaction = async function (rounds) {
+        const coreB = await HumanPhysics.runReactionTask({ rounds: rounds || 6, stage: $('stage') });
+        coreB.input = { moves: coreB.input.moves, clicks: coreB.input.clicks, keydowns: coreB.input.keydowns, untrusted: coreB.input.untrusted, moveIntervalStats: coreB.input.moveIntervalStats };
+        RESULT.coreB = coreB;
+        renderAll();
+        return coreB;
+      };
+
+      runPassive();
+    </script>
+  </body>
+</html>

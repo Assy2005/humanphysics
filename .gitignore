@@ -1,0 +1,18 @@
+# 収集サンプル（実験データはコミットしない）
+data/
+*.jsonl
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Selenium / ドライバ
+*.log
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Claude Code（launch.json だけは残す）
+.claude/*
+!.claude/launch.json
