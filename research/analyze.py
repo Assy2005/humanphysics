@@ -22,7 +22,7 @@ except Exception:  # noqa: BLE001
     pass
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-DEFAULT = os.path.join(ROOT, "data", "samples.jsonl")
+DEFAULT = os.path.join(ROOT, "..", "data", "samples.jsonl")  # repo-root の data/
 
 
 def pluck(obj, path):

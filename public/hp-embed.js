@@ -72,27 +72,13 @@
     return b;
   }
 
-  // step-up（任意）: 怪しい時だけ知覚-行動チャレンジを出す
-  async function runStepUp(opts) {
-    var ov = document.createElement('div');
-    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:99999;display:flex;align-items:center;justify-content:center;flex-direction:column;color:#fff;font-family:sans-serif';
-    ov.innerHTML = '<div style="margin-bottom:12px">出た向きの矢印キー（←/→）を押してください</div>' +
-      '<div id="hp-stage" tabindex="0" style="width:320px;height:200px;background:#111;border:1px dashed #555;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:90px;color:#58a6ff"></div>';
-    document.body.appendChild(ov);
-    var stage = ov.querySelector('#hp-stage'); stage.focus();
-    var cb = await HP.runReactionTask({ rounds: opts.rounds || 5, stage: stage });
-    document.body.removeChild(ov);
-    return { trials: cb.trials, summary: cb.summary, input: { moves: cb.input.moves, clicks: cb.input.clicks, keydowns: cb.input.keydowns, untrusted: cb.input.untrusted } };
-  }
-
-  // 検証本体: challenge → 信号収集 → /hp/verify（サーバ採点）→ {ok, verdict, token, ...}
+  // 検証本体: challenge → 受動シグナル収集 → /hp/verify（サーバ採点）→ {ok, verdict, token, ...}
   async function verify(opts) {
     opts = opts || {};
     var ep = opts.endpoint || '';
     var ch = await fetch(ep + '/hp/challenge', { method: 'POST' }).then(function (r) { return r.json(); });
     var signals = await HP.runPassive();
     signals.behavior = opts.behavior || null;
-    if (opts.interactive) signals.coreB = await runStepUp(opts);
     return fetch(ep + '/hp/verify', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ nonce: ch.nonce, exp: ch.exp, sig: ch.sig, signals: signals }),

@@ -111,7 +111,6 @@ def check_token(token):
 
 # ============================ サーバ側スコアリング ============================
 # 判定はここ（サーバ）で計算する。クライアントの score は無視する。
-REACTION_FLOOR_MS = 100
 
 
 def _path(obj, dotted, default=None):
@@ -141,9 +140,29 @@ def hp_score(signals):
     if aux.get("languagesEmpty"):
         bot += 15; reasons.append("languages 空")
 
-    webgl = _path(signals, "coreA.webgl") or {}
-    if webgl.get("supported") and webgl.get("software"):
-        bot += 35; reasons.append("WebGL ソフトレンダラ: %s" % webgl.get("renderer"))
+    # GPU依存（gpu-detect 合流時は coreA.gpu、無ければ coreA.webgl にフォールバック）
+    gpu = _path(signals, "coreA.gpu") or {}
+    gl = gpu.get("webgl") or _path(signals, "coreA.webgl") or {}
+    wg = gpu.get("webgpu") or {}
+    ua_l = (aux.get("userAgent") or "").lower()
+    is_chrome = ("chrome" in ua_l or "edg" in ua_l) and "firefox" not in ua_l
+    if gl.get("supported") is False:
+        bot += 50; reasons.append("WebGL 利用不可（GPU無/headless）")
+    elif gl.get("software"):
+        bot += 45; reasons.append("WebGL ソフトレンダラ: %s" % gl.get("renderer"))
+    if gpu:
+        if wg.get("supported") and wg.get("adapter") and wg.get("isFallbackAdapter"):
+            bot += 35; reasons.append("WebGPU フォールバック(software)アダプタ")
+        if is_chrome:
+            if not wg.get("supported"):
+                bot += 15; reasons.append("Chrome系UAだが WebGPU 非対応")
+            elif wg.get("adapter") is False:
+                bot += 25; reasons.append("WebGPU APIはあるがアダプタ取得不可（headless の兆候）")
+        rnd = (gl.get("renderer") or "").lower()
+        claims_gpu = any(x in rnd for x in ["nvidia", "geforce", "radeon", "amd", "intel", "iris", "apple", "adreno", "mali", "directx", "angle"])
+        rm = gl.get("renderMs")
+        if claims_gpu and not gl.get("software") and rm is not None and rm > 120:
+            bot += 40; reasons.append("実GPUを名乗るのに描画が遅い(%sms)＝レンダラ詐称の疑い" % rm)
 
     # DRM/CDM アテステーション: Chrome系を名乗るのに Widevine も PlayReady も皆無（timeout 除外）
     drm = _path(signals, "coreA.drm") or {}
@@ -173,20 +192,6 @@ def hp_score(signals):
             bot += 30; reasons.append("打鍵間隔が機械的(cv=%s)" % ick)
         if beh.get("pointerMoves", 0) == 0 and beh.get("submittedByClick"):
             bot += 15; reasons.append("クリック前のポインタ移動ゼロ")
-
-    # Core B（step-up を使った場合のみ）
-    b = signals.get("coreB") or {}
-    s = b.get("summary") or {}
-    if s.get("responded", 0) > 0:
-        if s.get("belowHumanFloor", 0) > 0:
-            bot += 50; reasons.append("反応 %d 回が人間下限(%dms)未満" % (s["belowHumanFloor"], REACTION_FLOOR_MS))
-        if s.get("untrustedResponses", 0) > 0:
-            bot += 45; reasons.append("合成イベント応答 %d" % s["untrustedResponses"])
-        lat = s.get("latency") or {}
-        if lat.get("n", 0) >= 3 and lat.get("cv") is not None and lat["cv"] < 0.06:
-            bot += 30; reasons.append("反応分布が過小分散(cv=%s)" % lat["cv"])
-        if s.get("nogoErrors", 0) > 0:
-            bot += 35; reasons.append("No-Go 試行で誤って応答 %d（抑制の失敗）" % s["nogoErrors"])
 
     human = max(0, min(100, 100 - bot))
     verdict = "human-likely"

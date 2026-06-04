@@ -1,26 +1,22 @@
 /*
- * HumanPhysics — "Physics over Properties" bot 検知 PoC ライブラリ
+ * HumanPhysics — "Physics over Properties" passive bot detection
  * ------------------------------------------------------------------
  * 思想: クライアントが「何を名乗るか(properties)」ではなく、
- *       「実行と操作が物理的にどう振る舞うか(physics)」を計測する。
+ *       「実行が物理的にどう振る舞うか(physics)」を *無操作で* 計測する。
  *
- *   Core A : 実行物理アテステーション（ユーザー操作ゼロ）
- *            タイマ分解能 / 計算スループットのジッタ / 数値精度 /
- *            WebGL レンダリング時間 / イベントループ周期
- *   Core B : 知覚-行動タイミング不変量（最小の自然操作）
- *            ランダム刺激への選択反応の「因果・遅延分布・入力真正性」
- *   aux    : 安価なプロパティ痕跡（低重み・単純botの足切り用）
+ *   Core A : 実行物理（ユーザー操作ゼロ）
+ *            タイマ分解能 / 計算ジッタ / 数値精度 / WebGL / イベントループ / DRM / HW復号
+ *   GPU    : GPU依存（WebGL/WebGPU の実在・能力・描画/計算時間）※ gpu-detect.js
+ *   aux    : 安価なプロパティ痕跡（webdriver / headless / automation グローバル等）
  *
- * 依存なし。window.HumanPhysics として公開。
+ * 依存なし（GPU シグナルは gpu-detect.js を同時に読み込むと自動で合流）。
+ * window.HumanPhysics として公開。
  */
 (function () {
   'use strict';
 
   // ===================== 共通ユーティリティ =====================
   const nowMs = () => performance.now();
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  const nextPaint = () =>
-    new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(nowMs()))));
 
   function stats(arr) {
     const a = arr.filter((x) => typeof x === 'number' && isFinite(x)).slice().sort((x, y) => x - y);
@@ -102,8 +98,7 @@
   function bench(fn, iters, reps) {
     const times = [];
     let sink = 0;
-    // ウォームアップ（JIT安定化）
-    sink ^= fn(iters) | 0;
+    sink ^= fn(iters) | 0; // ウォームアップ（JIT安定化）
     for (let r = 0; r < reps; r++) {
       const t0 = nowMs();
       const v = fn(iters);
@@ -127,9 +122,8 @@
     };
   }
 
-  // (A3) 数値精度フィンガープリント。
-  // 超越関数の bit パターンをハッシュ化。エンジン/CPU/libm 差で安定的に変わる。
-  // 「Chromeを名乗るのにV8でない」等のエンジン詐称を物理で暴く土台。
+  // (A3) 数値精度フィンガープリント。超越関数の bit パターンをハッシュ化。
+  // エンジン/CPU/libm 差で安定的に変わる（端末識別にも使える）。
   function probeMathPrecision() {
     const vals = [];
     const push = (v) => vals.push(v);
@@ -244,17 +238,15 @@
     return { rafIntervals: raf.map((x) => round(x, 3)), raf: stats(raf), setTimeout0: stats(st) };
   }
 
-  // (A6) DRM/EME ケイパビリティ（ハードウェア・アテステーション＝「映画配信の保護層」）。
-  // 実消費者ブラウザは Widevine/PlayReady を持ち、対応機では HW_SECURE_* が通る。
-  // headless Chromium や多くの bot は CDM 非搭載 →「Chrome を名乗るのに Widevine 無し」を暴く。
+  // (A6) DRM/EME ケイパビリティ（ハードウェア・アテステーション）。
+  // 実消費者ブラウザは Widevine を持つが、headless Chromium / Chrome-for-Testing は CDM 非搭載。
+  // 「Chrome を名乗るのに Widevine 皆無」を中重みで扱う（誤検知回避のため timeout は除外）。
   async function probeDRM() {
     if (!navigator.requestMediaKeySystemAccess) return { supported: false };
     var cfg = function (robustness) {
       return [{ initDataTypes: ['cenc'], videoCapabilities: [{ contentType: 'video/mp4; codecs="avc1.42E01E"', robustness: robustness }] }];
     };
-    // 一部環境(Electron 等)で requestMediaKeySystemAccess がハングするためタイムアウトを付ける
     var timeout = function (ms) { return new Promise(function (_, rej) { setTimeout(function () { rej(new Error('drm-timeout')); }, ms); }); };
-    // 初回 CDM 初期化が遅い実ブラウザを「なし」と誤判定しないよう、基本クエリは余裕を持たせる
     var tryKS = async function (ks, r, ms) {
       try { await Promise.race([navigator.requestMediaKeySystemAccess(ks, cfg(r)), timeout(ms)]); return true; }
       catch (e) { return e.message === 'drm-timeout' ? null : false; } // null=タイムアウト(不明), false=明確に非対応
@@ -273,9 +265,8 @@
     return out;
   }
 
-  // (A7) ハードウェア・メディア能力（HW オーバーレイ/HW 復号が "実在" するかの代理）。
-  // 実消費者デバイスは H.264/VP9 等を powerEfficient(=HW 復号)で再生でき、HEVC の HW 復号も多い。
-  // headless/VM/エミュレーションは HW 経路が無く powerEfficient:false や未対応になりがち。
+  // (A7) ハードウェア・メディア能力（参考: HW 復号の実在）。
+  // 注: 実機 headless も HW 復号を持つため単独の弁別力は弱い。記録のみ。
   async function probeMediaCaps() {
     var mc = navigator.mediaCapabilities;
     if (!mc || !mc.decodingInfo) return { supported: false };
@@ -298,12 +289,7 @@
     }
     var hwAny = false;
     for (var k in codecs) { if (codecs[k] && codecs[k].powerEfficient) hwAny = true; }
-    return {
-      supported: true,
-      codecs: codecs,
-      hwDecodeAny: hwAny,                                     // どれか1つでも HW 復号
-      hevcHW: !!(codecs.hevc && codecs.hevc.powerEfficient),  // 実消費者デバイスの強い兆候
-    };
+    return { supported: true, codecs: codecs, hwDecodeAny: hwAny, hevcHW: !!(codecs.hevc && codecs.hevc.powerEfficient) };
   }
 
   // ===================== aux: 安価なプロパティ痕跡 =====================
@@ -346,16 +332,7 @@
           return '';
         },
       });
-      // eslint-disable-next-line no-console
       console.debug(e);
-    } catch (_) {}
-
-    // Notification と permissions の不整合（古典的 headless 痕跡）
-    let notificationMismatch = null;
-    try {
-      if (n.permissions && typeof Notification !== 'undefined') {
-        notificationMismatch = 'pending';
-      }
     } catch (_) {}
 
     const ua = n.userAgent || '';
@@ -377,302 +354,57 @@
           : false,
       automationGlobals,
       cdpStackGetter,
-      notificationMismatch,
     };
   }
 
-  // ===================== Core B: 知覚-行動タイミング =====================
-  // ランダム方向(◀/▶)の刺激を提示し、ArrowLeft/ArrowRight の選択反応を計測。
-  // 計測点: 刺激ペイント時刻→応答時刻の遅延 / 正誤 / isTrusted / マウス挙動。
-  const REACTION_FLOOR_MS = 100; // 人間の物理的下限(文献): これ未満は不可能
-
-  function makeInputRecorder() {
-    const rec = { moves: 0, moveIntervals: [], lastMove: null, untrusted: 0, keydowns: 0, clicks: 0 };
-    const onMove = (e) => {
-      rec.moves++;
-      const t = nowMs();
-      if (rec.lastMove != null) rec.moveIntervals.push(t - rec.lastMove);
-      rec.lastMove = t;
-      if (!e.isTrusted) rec.untrusted++;
-    };
-    const onKey = (e) => {
-      rec.keydowns++;
-      if (!e.isTrusted) rec.untrusted++;
-    };
-    const onClick = (e) => {
-      rec.clicks++;
-      if (!e.isTrusted) rec.untrusted++;
-    };
-    window.addEventListener('mousemove', onMove, true);
-    window.addEventListener('keydown', onKey, true);
-    window.addEventListener('click', onClick, true);
-    rec.stop = () => {
-      window.removeEventListener('mousemove', onMove, true);
-      window.removeEventListener('keydown', onKey, true);
-      window.removeEventListener('click', onClick, true);
-      rec.moveIntervalStats = stats(rec.moveIntervals);
-      return rec;
-    };
-    return rec;
-  }
-
-  async function runReactionTask(opts) {
-    opts = opts || {};
-    const rounds = opts.rounds || 6;
-    const stage = opts.stage; // 刺激を出す DOM 要素
-    const onProgress = opts.onProgress || (() => {});
-    if (!stage) throw new Error('runReactionTask: opts.stage (DOM element) が必要です');
-
-    const rec = makeInputRecorder();
-    const trials = [];
-
-    for (let i = 0; i < rounds; i++) {
-      const dir = Math.random() < 0.5 ? 'left' : 'right';
-      onProgress({ phase: 'wait', index: i, rounds });
-      stage.innerHTML = '<div class="hp-fix">+</div>';
-      await wait(800 + Math.random() * 1700); // ランダム待機（予測不能に）
-
-      // 刺激提示 → ペイント完了時刻を取得
-      stage.innerHTML = '<div class="hp-stim">' + (dir === 'left' ? '◀' : '▶') + '</div>';
-      const shownAt = await nextPaint();
-      onProgress({ phase: 'stim', index: i, rounds, dir });
-
-      const resp = await new Promise((resolve) => {
-        let done = false;
-        const to = setTimeout(() => {
-          if (done) return;
-          done = true;
-          window.removeEventListener('keydown', onKey, true);
-          resolve(null); // タイムアウト
-        }, 3000);
-        const onKey = (e) => {
-          if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-          if (done) return;
-          done = true;
-          clearTimeout(to);
-          window.removeEventListener('keydown', onKey, true);
-          resolve({
-            t: nowMs(),
-            key: e.key,
-            isTrusted: e.isTrusted,
-            eventTs: e.timeStamp,
-          });
-        };
-        window.addEventListener('keydown', onKey, true);
-      });
-
-      stage.innerHTML = '';
-      if (resp == null) {
-        trials.push({ index: i, dir, timeout: true });
-        continue;
-      }
-      const pressed = resp.key === 'ArrowLeft' ? 'left' : 'right';
-      trials.push({
-        index: i,
-        dir,
-        pressed,
-        correct: pressed === dir,
-        latencyMs: round(resp.t - shownAt, 3),
-        isTrusted: resp.isTrusted,
-      });
-      await wait(250);
-    }
-
-    rec.stop();
-    const latencies = trials.filter((t) => !t.timeout).map((t) => t.latencyMs);
-    const correctCount = trials.filter((t) => t.correct).length;
-    const lat = stats(latencies);
-    const summary = {
-      rounds,
-      responded: latencies.length,
-      timeouts: trials.filter((t) => t.timeout).length,
-      accuracy: trials.length ? round(correctCount / trials.length, 3) : 0,
-      latency: lat,
-      // 人間の反応分布は右に歪む(平均>中央値)。bot は対称/過小分散になりがち。
-      skewPositive: lat.n ? lat.mean > lat.median : null,
-      belowHumanFloor: latencies.filter((x) => x < REACTION_FLOOR_MS).length,
-      untrustedResponses: trials.filter((t) => t.isTrusted === false).length,
-    };
-    return { trials, summary, input: rec };
-  }
-
-  // ===================== Core B v2: モーション知覚（DOM/スクショ耐性）=====================
-  // ランダムドット運動(RDK)。一部のドットだけが一方向にコヒーレントに動く。
-  // 答え(方向)は canvas のピクセル"運動"にしか無い → DOM即読みも単一スクショも不可、
-  // 時間的に統合して初めて知覚できる。0%コヒーレンス=No-Go。難易度(coherence)も変える。
-  async function runMotionChallenge(opts) {
-    opts = opts || {};
-    var rounds = opts.rounds || 6;
-    var stage = opts.stage;
-    var onProgress = opts.onProgress || function () {};
-    if (!stage) throw new Error('runMotionChallenge: opts.stage (DOM要素) が必要です');
-
-    var W = 320, H = 240, N = 130, speed = 2.4, durMs = 1400, graceMs = 900;
-    stage.innerHTML = '';
-    var canvas = document.createElement('canvas');
-    canvas.width = W; canvas.height = H;
-    canvas.style.cssText = 'background:#000;border-radius:8px;display:block;margin:0 auto';
-    stage.appendChild(canvas);
-    var ctx = canvas.getContext('2d');
-    var DIRS = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] };
-    var KEYMAP = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down', ' ': 'none', Spacebar: 'none' };
-    var dirNames = ['left', 'right', 'up', 'down'];
-    var cohSeq = [0.5, 0.28, 0.14, 0.5, 0.28, 0.14];
-    var trials = [];
-
-    for (var i = 0; i < rounds; i++) {
-      var isNoGo = Math.random() < 0.2;
-      var coh = isNoGo ? 0 : cohSeq[i % cohSeq.length];
-      var dir = isNoGo ? 'none' : dirNames[(Math.random() * 4) | 0];
-      var dvec = isNoGo ? null : DIRS[dir];
-      var dots = new Array(N);
-      for (var d = 0; d < N; d++) dots[d] = [Math.random() * W, Math.random() * H];
-
-      onProgress({ phase: 'gap', index: i, rounds: rounds });
-      ctx.clearRect(0, 0, W, H);
-      await wait(600 + Math.random() * 700);
-      onProgress({ phase: 'motion', index: i, rounds: rounds });
-
-      var resp = null, onset = null, raf = null;
-      var onKey = function (e) {
-        var m = KEYMAP[e.key];
-        if (m === undefined || resp) return;
-        resp = { mapped: m, t: nowMs(), isTrusted: e.isTrusted };
-      };
-      window.addEventListener('keydown', onKey, true);
-      var start = nowMs();
-      await new Promise(function (done) {
-        function frame() {
-          for (var k = 0; k < N; k++) {
-            if (dvec && Math.random() < coh) { dots[k][0] += dvec[0] * speed; dots[k][1] += dvec[1] * speed; }
-            else { dots[k][0] = Math.random() * W; dots[k][1] = Math.random() * H; }
-            if (dots[k][0] < 0) dots[k][0] += W; else if (dots[k][0] >= W) dots[k][0] -= W;
-            if (dots[k][1] < 0) dots[k][1] += H; else if (dots[k][1] >= H) dots[k][1] -= H;
-          }
-          ctx.clearRect(0, 0, W, H);
-          ctx.fillStyle = '#fff';
-          for (var j = 0; j < N; j++) ctx.fillRect(dots[j][0] | 0, dots[j][1] | 0, 3, 3);
-          if (onset === null) onset = nowMs();
-          if (resp || nowMs() - start > durMs) { done(); return; }
-          raf = requestAnimationFrame(frame);
-        }
-        raf = requestAnimationFrame(frame);
-      });
-      if (raf) cancelAnimationFrame(raf);
-      if (!resp) { // 運動停止後の猶予
-        ctx.clearRect(0, 0, W, H);
-        await new Promise(function (done) {
-          var to = setTimeout(done, graceMs);
-          var iv = setInterval(function () { if (resp) { clearTimeout(to); clearInterval(iv); done(); } }, 20);
-        });
-      }
-      window.removeEventListener('keydown', onKey, true);
-
-      var pressedDir = !!(resp && resp.mapped !== 'none');
-      trials.push({
-        index: i, dir: dir, coherence: coh, isNoGo: isNoGo,
-        responded: !!resp, mapped: resp ? resp.mapped : null,
-        latencyMs: (resp && onset != null) ? round(resp.t - onset, 1) : null,
-        isTrusted: resp ? resp.isTrusted : null,
-        correct: isNoGo ? !pressedDir : !!(resp && resp.mapped === dir),
-        falseAlarm: isNoGo && pressedDir,
-      });
-      ctx.clearRect(0, 0, W, H);
-      await wait(300);
-    }
-
-    var goT = trials.filter(function (t) { return !t.isNoGo; });
-    var noGoT = trials.filter(function (t) { return t.isNoGo; });
-    var lat = stats(goT.filter(function (t) { return t.latencyMs != null; }).map(function (t) { return t.latencyMs; }));
-    return {
-      trials: trials,
-      summary: {
-        rounds: rounds,
-        accuracyGo: goT.length ? round(goT.filter(function (t) { return t.correct; }).length / goT.length, 3) : null,
-        noGoCount: noGoT.length,
-        noGoFalseAlarms: noGoT.filter(function (t) { return t.falseAlarm; }).length,
-        latency: lat,
-        belowHumanFloor: trials.filter(function (t) { return t.latencyMs != null && t.latencyMs < REACTION_FLOOR_MS; }).length,
-        untrustedResponses: trials.filter(function (t) { return t.isTrusted === false; }).length,
-      },
-    };
-  }
-
-  // ===================== スコアリング（透明・ルールベース）=====================
-  // PoC の目的は「分離が出るか」の観察。判定は解釈可能に保つ。
+  // ===================== スコアリング（透明・ルールベース・全パッシブ）=====================
+  // 設計思想: GPU無し/ソフトレンダラ/自動化痕跡 = 安価bot基盤を無操作で弾く。
+  // 実ハードウェア上のbot(headless=new / 実ブラウザのagent)は物理が本物なので通る = 既知の天井。
   function computeVerdict(result) {
     const reasons = [];
     let bot = 0; // bot 証拠スコア（高いほど bot 寄り）
-
     const aux = result.aux || {};
-    if (aux.automationGlobals && aux.automationGlobals.length) {
-      bot += 60;
-      reasons.push('automation グローバル検出: ' + aux.automationGlobals.join(','));
-    }
-    if (aux.webdriver === true) {
-      bot += 40;
-      reasons.push('navigator.webdriver = true');
-    }
-    if (aux.headlessUA) {
-      bot += 50;
-      reasons.push('UA に Headless');
-    }
-    if (aux.engineUAMismatch) {
-      bot += 25;
-      reasons.push('エンジン詐称の兆候 (vendor/productSub 不一致)');
-    }
-    if (aux.cdpStackGetter) {
-      bot += 20;
-      reasons.push('CDP/devtools red-pill 発火 (Error.stack getter)');
-    }
-    if (aux.languagesEmpty) {
-      bot += 15;
-      reasons.push('navigator.languages 空');
-    }
-
+    const uaStr = aux.userAgent || '';
     const a = result.coreA || {};
-    if (a.webgl && a.webgl.supported && a.webgl.software) {
-      bot += 35;
-      reasons.push('WebGL ソフトレンダラ: ' + a.webgl.renderer);
+
+    // --- aux（安価なプロパティ痕跡）---
+    if (aux.automationGlobals && aux.automationGlobals.length) {
+      bot += 60; reasons.push('automation グローバル検出: ' + aux.automationGlobals.join(','));
     }
-    if (a.compute && a.compute.int && a.compute.int.stats && a.compute.int.stats.cv === 0) {
-      bot += 10;
-      reasons.push('計算ジッタ cv=0（きれいすぎ）');
+    if (aux.webdriver === true) { bot += 40; reasons.push('navigator.webdriver = true'); }
+    if (aux.headlessUA) { bot += 50; reasons.push('UA に Headless'); }
+    if (aux.engineUAMismatch) { bot += 25; reasons.push('エンジン詐称の兆候 (vendor/productSub 不一致)'); }
+    if (aux.cdpStackGetter) { bot += 20; reasons.push('CDP/devtools red-pill 発火 (Error.stack getter)'); }
+    if (aux.languagesEmpty) { bot += 15; reasons.push('navigator.languages 空'); }
+
+    // --- GPU依存（gpu-detect.js が合流していれば coreA.gpu、無ければ coreA.webgl にフォールバック）---
+    const gl = (a.gpu && a.gpu.webgl) || a.webgl || {};
+    const wg = (a.gpu && a.gpu.webgpu) || {};
+    if (gl.supported === false) {
+      bot += 50; reasons.push('WebGL 利用不可（GPU無/headless）');
+    } else if (gl.software) {
+      bot += 45; reasons.push('WebGL ソフトレンダラ: ' + gl.renderer);
     }
-    // DRM/CDM アテステーション: Chrome系を名乗るのに Widevine も PlayReady も皆無
-    // = 自動化Chromium / Chrome-for-Testing / headless の兆候（中重み・誤検知回避のため timeout は除外）
-    var drm = a.drm || {};
-    var uaStr = (result.aux && result.aux.userAgent) || '';
-    if (/chrome|crios|edg|opr/i.test(uaStr) && drm.supported && drm.widevine === false && !drm.widevineTimedOut && drm.playready === false) {
-      bot += 25;
-      reasons.push('Chrome系UAだが DRM(CDM)が皆無 — 自動化/Chromium の兆候');
+    if (a.gpu) {
+      if (wg.supported && wg.adapter && wg.isFallbackAdapter) { bot += 35; reasons.push('WebGPU フォールバック(software)アダプタ'); }
+      if (/chrome|edg/i.test(uaStr) && !/firefox/i.test(uaStr)) {
+        if (!wg.supported) { bot += 15; reasons.push('Chrome系UAだが WebGPU 非対応'); }
+        else if (wg.adapter === false) { bot += 25; reasons.push('WebGPU APIはあるがアダプタ取得不可（headless の兆候）'); }
+      }
+      const claimsRealGpu = /nvidia|geforce|radeon|amd|intel|iris|apple|adreno|mali|powervr|directx|angle/i.test(gl.renderer || '');
+      if (claimsRealGpu && !gl.software && gl.renderMs != null && gl.renderMs > 120) {
+        bot += 40; reasons.push('実GPUを名乗るのに描画が遅い(' + gl.renderMs + 'ms)＝レンダラ詐称の疑い');
+      }
     }
 
-    const b = result.coreB;
-    if (b && b.summary) {
-      const s = b.summary;
-      if (s.responded > 0) {
-        if (s.belowHumanFloor > 0) {
-          bot += 50;
-          reasons.push('反応 ' + s.belowHumanFloor + ' 回が人間下限(' + REACTION_FLOOR_MS + 'ms)未満');
-        }
-        if (s.untrustedResponses > 0) {
-          bot += 45;
-          reasons.push('合成イベント(isTrusted=false) ' + s.untrustedResponses + ' 回');
-        }
-        if (s.latency.n >= 3 && s.latency.cv != null && s.latency.cv < 0.06) {
-          bot += 30;
-          reasons.push('反応分布が過小分散 (cv=' + s.latency.cv + ')');
-        }
-        if (s.latency.n >= 3 && s.skewPositive === false && s.latency.cv != null && s.latency.cv < 0.12) {
-          bot += 10;
-          reasons.push('反応分布が人間的でない（右歪みなし＋低分散）');
-        }
-        if (b.input && b.input.moves === 0 && b.input.clicks > 0) {
-          bot += 25;
-          reasons.push('クリック前のマウス移動ゼロ（テレポート）');
-        }
-      }
+    // --- Core A 物理の補助 ---
+    if (a.compute && a.compute.int && a.compute.int.stats && a.compute.int.stats.cv === 0) {
+      bot += 10; reasons.push('計算ジッタ cv=0（きれいすぎ）');
+    }
+    // DRM/CDM: Chrome系を名乗るのに Widevine も PlayReady も皆無（timeout 除外）
+    const drm = a.drm || {};
+    if (/chrome|crios|edg|opr/i.test(uaStr) && drm.supported && drm.widevine === false && !drm.widevineTimedOut && drm.playready === false) {
+      bot += 25; reasons.push('Chrome系UAだが DRM(CDM)が皆無 — 自動化/Chromium の兆候');
     }
 
     const humanScore = Math.max(0, Math.min(100, 100 - bot));
@@ -683,8 +415,8 @@
   }
 
   // ===================== 公開 API =====================
+  // Core A + aux（ユーザー操作ゼロ）+ GPU（gpu-detect.js があれば合流）
   async function runPassive() {
-    // Core A + aux（ユーザー操作ゼロ）
     const aux = probeAux();
     const timer = probeTimer();
     const compute = probeCompute();
@@ -693,23 +425,26 @@
     const scheduling = await probeScheduling();
     const drm = await probeDRM();
     const media = await probeMediaCaps();
+    let gpu = null;
+    try {
+      if (window.GPUDetect && window.GPUDetect.run) {
+        const g = await window.GPUDetect.run();
+        gpu = { webgl: g.webgl, webgpu: g.webgpu };
+      }
+    } catch (e) {}
     return {
-      schema: 1,
+      schema: 2,
       ts: Date.now(),
       label: null,
       href: location.href,
       aux,
-      coreA: { timer, compute, math, webgl, scheduling, drm, media },
-      coreB: null,
+      coreA: { timer, compute, math, webgl, scheduling, drm, media, gpu },
     };
   }
 
   window.HumanPhysics = {
-    runPassive, // Core A + aux のみ（無操作）
-    runReactionTask, // Core B v1（要 stage 要素）
-    runMotionChallenge, // Core B v2: モーション知覚（DOM/スクショ耐性）
+    runPassive, // Core A + aux + GPU（無操作）
     computeVerdict,
-    _internal: { stats, probeAux, probeTimer, probeCompute, probeMathPrecision, probeWebGL, probeScheduling },
-    REACTION_FLOOR_MS,
+    _internal: { stats, probeAux, probeTimer, probeCompute, probeMathPrecision, probeWebGL, probeScheduling, probeDRM, probeMediaCaps },
   };
 })();
